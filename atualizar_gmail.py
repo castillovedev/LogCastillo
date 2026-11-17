@@ -1,45 +1,63 @@
 import imaplib
 import email
 import os
-import pandas as pd
 import sqlite3
+import pandas as pd
 from dotenv import load_dotenv
-   
-# Carrega as senhas ocultas do arquivo .env
+
 load_dotenv()
-   
-# --- CONFIGURAÇÕES ---
-# Agora o código puxa as senhas sem mostrar no texto!
-GMAIL_USER = os.getenv("GMAIL_USER")
-GMAIL_PASS = os.getenv("GMAIL_PASS")
+
+def _get_secret(nome):
+    """Lê do .env/variável de ambiente; se não achar, tenta st.secrets."""
+    valor = os.getenv(nome)
+    if valor:
+        return valor
+    try:
+        import streamlit as st
+        return st.secrets[nome]
+    except Exception:
+        return None
+
+GMAIL_USER = _get_secret("GMAIL_USER")
+GMAIL_PASS = _get_secret("GMAIL_PASS")
 DB_PATH = "logistica.db"
+
 
 def processar_e_atualizar_banco(caminho_excel):
     """Lê o Excel baixado e salva no banco de dados SQLite."""
     df = pd.read_excel(caminho_excel)
-    
+
     if 'Cotação' in df.columns:
         df['Cotação'] = df['Cotação'].astype(str).str.strip()
     if 'OV Pedido' in df.columns:
         df['OV Pedido'] = df['OV Pedido'].astype(str).str.strip()
-        
+
     conn = sqlite3.connect(DB_PATH)
     df.to_sql('pedidos_logistica', conn, if_exists='replace', index=False)
     conn.close()
-    print("✅ Banco de dados 'logistica.db' atualizado com sucesso!")
+
 
 def verificar_gmail():
-    """Conecta ao Gmail e busca planilhas anexas em e-mails não lidos."""
+    """Busca o e-mail mais recente com planilha .xlsx e atualiza o banco.
+    Retorna (sucesso: bool, mensagem: str)."""
+    if not GMAIL_USER or not GMAIL_PASS:
+        return False, "GMAIL_USER/GMAIL_PASS não configurados."
+
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(GMAIL_USER, GMAIL_PASS)
         mail.select("inbox")
 
-        # Busca e-mails não lidos com o assunto de logística
-        status, messages = mail.search(None, '(UNSEEN SUBJECT "Status de Transporte")')
+        status, messages = mail.search(None, '(SUBJECT "Status de Transporte")')
+        ids = messages[0].split()
 
-        for num in messages[0].split():
-            _, data = mail.fetch(num, "(RFC822)")
+        if not ids:
+            mail.logout()
+            return False, "Nenhum e-mail com esse assunto foi encontrado."
+
+        # Do mais novo para o mais antigo; para no primeiro com .xlsx
+        for num in reversed(ids):
+            _, data = mail.fetch(num, "(BODY.PEEK[])")  # não marca como lido
             msg = email.message_from_bytes(data[0][1])
 
             for part in msg.walk():
@@ -47,21 +65,26 @@ def verificar_gmail():
                     continue
 
                 filename = part.get_filename()
-                if filename and filename.endswith('.xlsx'):
+                if filename and filename.lower().endswith('.xlsx'):
                     temp_filepath = os.path.join(".", "logistica_temp.xlsx")
                     with open(temp_filepath, 'wb') as f:
                         f.write(part.get_payload(decode=True))
-                    
-                    print(f"📥 Anexo '{filename}' baixado com sucesso.")
-                    processar_e_atualizar_banco(temp_filepath)
-                    
-                    # Remove o arquivo temporário
-                    if os.path.exists(temp_filepath):
-                        os.remove(temp_filepath)
+
+                    try:
+                        processar_e_atualizar_banco(temp_filepath)
+                    finally:
+                        if os.path.exists(temp_filepath):
+                            os.remove(temp_filepath)
+
+                    mail.logout()
+                    return True, f"Banco atualizado com '{filename}'."
 
         mail.logout()
+        return False, "Nenhum anexo .xlsx encontrado nos e-mails."
+
     except Exception as e:
-        print(f"Erro no processamento do Gmail: {e}")
+        return False, f"Erro no processamento do Gmail: {e}"
+
 
 if __name__ == "__main__":
-    verificar_gmail()
+    print(verificar_gmail())

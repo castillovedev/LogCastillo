@@ -1,0 +1,5 @@
+.env
+logistica.db
+logistica_temp.xlsx
+__pycache__/
+*.pyc

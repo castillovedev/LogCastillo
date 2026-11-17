@@ -2,9 +2,15 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import os
+from atualizar_gmail import verificar_gmail
 
-# 1. Configuração inicial da página (DEVE SER A PRIMEIRA INSTRUÇÃO)
 st.set_page_config(page_title="Portal de Consulta de Logística", page_icon="📦", layout="centered")
+
+@st.cache_resource(ttl=600)  # sincroniza no máximo a cada 10 minutos
+def sincronizar():
+    return verificar_gmail()
+
+ok, msg_sync = sincronizar()
 
 DB_PATH = 'logistica.db'
 
@@ -65,3 +71,6 @@ if st.button("Buscar Status", type="primary"):
                 st.error(f"Erro ao consultar o banco de dados: {e}")
     else:
         st.warning("Por favor, informe o número da Cotação.")
+
+with st.expander("Status da sincronização"):
+    (st.success if ok else st.error)(msg_sync)
